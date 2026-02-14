@@ -1,55 +1,105 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from typing import List, Optional
+from fastapi import FastAPI, HTTPException, Depends
+from fastapi.responses import FileResponse
+from sqlalchemy.orm import Session
+from typing import List
+import os
 
-app = FastAPI(title="To-Do List API")
+import models, schemas, database, celery_app
 
-class TodoItem(BaseModel):
-    id: Optional[int] = None
-    title: str
-    description: Optional[str] = None
-    completed: bool = False
+# Crear tablas
+models.Base.metadata.create_all(bind=database.engine)
 
-# In-memory storage for demonstration (can be upgraded to SQLite later)
-todos = []
-id_counter = 1
+app = FastAPI(title="To-Do List API with Celery")
 
-@app.get("/todos", response_model=List[TodoItem])
-async def get_todos():
-    return todos
+# Dependency
+def get_db():
+    db = database.SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
-@app.post("/todos", response_model=TodoItem, status_code=201)
-async def create_todo(todo: TodoItem):
-    global id_counter
-    todo.id = id_counter
-    todos.append(todo)
-    id_counter += 1
-    return todo
+@app.get("/todos", response_model=List[schemas.Todo])
+def get_todos(db: Session = Depends(get_db)):
+    return db.query(models.Todo).all()
 
-@app.get("/todos/{todo_id}", response_model=TodoItem)
-async def get_todo(todo_id: int):
-    for item in todos:
-        if item.id == todo_id:
-            return item
-    raise HTTPException(status_code=404, detail="Todo item not found")
+@app.post("/todos", response_model=schemas.Todo, status_code=201)
+def create_todo(todo: schemas.TodoCreate, db: Session = Depends(get_db)):
+    db_todo = models.Todo(**todo.model_dump())
+    db.add(db_todo)
+    db.commit()
+    db.refresh(db_todo)
+    
+    # Disparar tarea de Celery (Notificación Fake)
+    celery_app.send_notification_email.delay(db_todo.id, db_todo.title)
+    
+    return db_todo
 
-@app.put("/todos/{todo_id}", response_model=TodoItem)
-async def update_todo(todo_id: int, updated_todo: TodoItem):
-    for index, item in enumerate(todos):
-        if item.id == todo_id:
-            updated_todo.id = todo_id
-            todos[index] = updated_todo
-            return updated_todo
-    raise HTTPException(status_code=404, detail="Todo item not found")
+@app.get("/todos/{todo_id}", response_model=schemas.Todo)
+def get_todo(todo_id: int, db: Session = Depends(get_db)):
+    db_todo = db.query(models.Todo).filter(models.Todo.id == todo_id).first()
+    if db_todo is None:
+        raise HTTPException(status_code=404, detail="Todo not found")
+    return db_todo
+
+@app.put("/todos/{todo_id}", response_model=schemas.Todo)
+def update_todo(todo_id: int, updated_todo: schemas.TodoCreate, db: Session = Depends(get_db)):
+    db_todo = db.query(models.Todo).filter(models.Todo.id == todo_id).first()
+    if db_todo is None:
+        raise HTTPException(status_code=404, detail="Todo not found")
+    
+    for key, value in updated_todo.model_dump().items():
+        setattr(db_todo, key, value)
+    
+    db.commit()
+    db.refresh(db_todo)
+    return db_todo
 
 @app.delete("/todos/{todo_id}", status_code=204)
-async def delete_todo(todo_id: int):
-    for index, item in enumerate(todos):
-        if item.id == todo_id:
-            todos.pop(index)
-            return
-    raise HTTPException(status_code=404, detail="Todo item not found")
+def delete_todo(todo_id: int, db: Session = Depends(get_db)):
+    db_todo = db.query(models.Todo).filter(models.Todo.id == todo_id).first()
+    if db_todo is None:
+        raise HTTPException(status_code=404, detail="Todo not found")
+    db.delete(db_todo)
+    db.commit()
+    return
+
+# --- Endpoints de Celery Export ---
+
+@app.post("/export", status_code=202)
+def trigger_export():
+    task = celery_app.export_todos_to_csv.delay()
+    return {"task_id": task.id, "status": "Pending"}
+
+@app.get("/export/{task_id}")
+def get_export_status(task_id: str):
+    task_result = celery_app.celery.AsyncResult(task_id)
+    
+    response = {
+        "task_id": task_id,
+        "status": task_result.status,
+        "result": None
+    }
+    
+    if task_result.status == "SUCCESS":
+        response["result"] = f"/export/{task_id}/download"
+        
+    return response
+
+@app.get("/export/{task_id}/download")
+def download_export(task_id: str):
+    task_result = celery_app.celery.AsyncResult(task_id)
+    if task_result.status != "SUCCESS":
+        raise HTTPException(status_code=400, detail="Task not finished or failed")
+    
+    file_name = task_result.result
+    file_path = os.path.join(celery_app.SHARED_DIR, file_name)
+    
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found")
+        
+    return FileResponse(path=file_path, filename=file_name, media_type='text/csv')
 
 @app.get("/health")
-async def health_check():
+def health_check():
     return {"status": "ok"}
