@@ -1,5 +1,6 @@
 # Python
 __pycache__/
+./**/__pycache__/*
 *.py[cod]
 *$py.class
 .venv
@@ -12,7 +13,13 @@ ENV/
 
 # App Data
 api/data/
-api/shared/
+
 
 # Docker
 .docker/
+
+exported_todos.csv
+.shared/
+.data/
+
+api/celerybeat-schedule

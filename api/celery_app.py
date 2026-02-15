@@ -11,7 +11,7 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 celery = Celery("tasks", broker=REDIS_URL, backend=REDIS_URL)
 
 # Directorio para archivos compartidos
-SHARED_DIR = "/app/shared"
+SHARED_DIR = "/var/lib/app/shared"
 os.makedirs(SHARED_DIR, exist_ok=True)
 
 
@@ -40,7 +40,7 @@ def generate_daily_summary():
 
         file_path = os.path.join(SHARED_DIR, "daily_summary.json")
         with open(file_path, "w") as f:
-            json.dump(summary, f, indent=4)
+            json.dump(summary, f, indent=4, ensure_ascii=False)
 
         print(f"[CELERY BEAT] Resumen guardado en {file_path}")
     finally:

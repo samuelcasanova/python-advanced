@@ -4,7 +4,7 @@ from sqlalchemy.orm import sessionmaker
 import os
 
 # Usaremos un directorio para los datos para que persistan en el volumen
-DATA_DIR = "/app/data"
+DATA_DIR = "/var/lib/app/data"
 os.makedirs(DATA_DIR, exist_ok=True)
 SQLALCHEMY_DATABASE_URL = f"sqlite:///{DATA_DIR}/todo.db"
 

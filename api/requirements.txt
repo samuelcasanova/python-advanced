@@ -4,3 +4,4 @@ pydantic==2.6.1
 sqlalchemy==2.0.25
 celery==5.3.6
 redis==5.0.1
+flower==2.0.1
