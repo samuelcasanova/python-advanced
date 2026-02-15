@@ -23,3 +23,10 @@ class TaskStatus(BaseModel):
     task_id: str
     status: str
     result: Optional[str] = None
+
+
+class PeriodicTaskSchema(BaseModel):
+    name: str
+    task: str
+    interval_seconds: int
+    enabled: bool = True

@@ -3,16 +3,24 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from typing import List
 import os
+from sqlalchemy_celery_beat.models import PeriodicTask, IntervalSchedule, PeriodicTaskChanged
 
 import models
 import schemas
 import database
 import celery_app
+import scheduler_utils
 
 # Crear tablas
 models.Base.metadata.create_all(bind=database.engine)
 
 app = FastAPI(title="To-Do List API with Celery")
+
+
+@app.on_event("startup")
+def startup_event():
+    scheduler_utils.setup_periodic_tasks()
+    print("Periodic tasks initialized.")
 
 
 def get_db():
@@ -114,3 +122,94 @@ def download_export(task_id: str):
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
+
+# --- Endpoints de Gestión del Scheduler ---
+
+@app.get("/scheduler/tasks", response_model=List[schemas.PeriodicTaskSchema])
+def list_scheduled_tasks(db: Session = Depends(get_db)):
+    tasks = db.query(PeriodicTask).all()
+    result = []
+    for t in tasks:
+        # En esta versión, el intervalo está en model_intervalschedule
+        interval = 0
+        if t.model_intervalschedule:
+            interval = t.model_intervalschedule.every
+
+        result.append(schemas.PeriodicTaskSchema(
+            name=t.name,
+            task=t.task,
+            interval_seconds=interval,
+            enabled=t.enabled
+        ))
+    return result
+
+
+@app.post("/scheduler/tasks", response_model=schemas.PeriodicTaskSchema)
+def create_scheduled_task(task_data: schemas.PeriodicTaskSchema, db: Session = Depends(get_db)):
+    try:
+        # 1. Asegurar o crear el intervalo
+        schedule = db.query(IntervalSchedule).filter_by(
+            every=task_data.interval_seconds,
+            period='seconds'
+        ).first()
+
+        if not schedule:
+            schedule = IntervalSchedule(every=task_data.interval_seconds, period='seconds')
+            db.add(schedule)
+            db.flush()
+
+        # 2. Crear o actualizar la tarea
+        periodic_task = db.query(PeriodicTask).filter_by(name=task_data.name).first()
+        if periodic_task:
+            periodic_task.task = task_data.task
+            periodic_task.discriminator = 'intervalschedule'
+            periodic_task.schedule_id = schedule.id
+            periodic_task.enabled = task_data.enabled
+        else:
+            periodic_task = PeriodicTask(
+                name=task_data.name,
+                task=task_data.task,
+                discriminator='intervalschedule',
+                schedule_id=schedule.id,
+                enabled=task_data.enabled,
+                args='[]',
+                kwargs='{}'
+            )
+            db.add(periodic_task)
+
+        db.flush()
+
+        # 3. Notificar al scheduler que hubo un cambio
+        PeriodicTaskChanged.update_from_session(db, commit=False)
+        db.commit()
+
+        return schemas.PeriodicTaskSchema(
+            name=periodic_task.name,
+            task=periodic_task.task,
+            interval_seconds=task_data.interval_seconds,
+            enabled=periodic_task.enabled
+        )
+    except Exception as e:
+        db.rollback()
+        print(f"Error creating/updating task: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/scheduler/tasks/{task_name}")
+def delete_scheduled_task(task_name: str, db: Session = Depends(get_db)):
+    try:
+        periodic_task = db.query(PeriodicTask).filter_by(name=task_name).first()
+        if not periodic_task:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        db.delete(periodic_task)
+
+        # Notificar cambio y hacer commit
+        PeriodicTaskChanged.update_from_session(db, commit=False)
+        db.commit()
+
+        return {"message": f"Task {task_name} deleted"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))

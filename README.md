@@ -68,6 +68,35 @@ To verify code formatting:
 ./.venv/bin/flake8 .
 ```
 
+## 📅 Dynamic Task Scheduling
+
+The application uses `sqlalchemy-celery-beat` for a database-backed scheduler. This allows you to manage periodic tasks via the API without restarting services.
+
+### List all scheduled tasks
+```bash
+curl -X GET http://localhost:8080/scheduler/tasks
+```
+
+### Create or Update a task
+To change the interval of the daily summary or add a new task:
+```bash
+curl -X POST http://localhost:8080/scheduler/tasks \
+     -H "Content-Type: application/json" \
+     -d '{
+       "name": "Generar resumen diario (cada minuto)", 
+       "task": "generate_daily_summary", 
+       "interval_seconds": 30, 
+       "enabled": true
+     }'
+```
+
+### Delete a task
+```bash
+curl -X DELETE "http://localhost:8080/scheduler/tasks/Generar%20resumen%20diario%20(cada%20minuto)"
+```
+
+*Note: Changes are picked up automatically by the Celery Beat container within seconds.*
+
 ## 📂 Project Structure
 
 - `api/`: FastAPI application code, models, and Celery task definitions.

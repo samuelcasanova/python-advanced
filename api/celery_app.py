@@ -79,10 +79,8 @@ def export_todos_to_csv():
 
 
 # Configuración de tareas programadas (Beat)
-celery.conf.beat_schedule = {
-    'summary-every-minute': {  # Lo ponemos cada minuto para que puedas verlo funcionar rápido
-        'task': 'generate_daily_summary',
-        'schedule': 60.0,
-    },
-}
+# Ahora usamos sqlalchemy-celery-beat para mayor flexibilidad
+celery.conf.beat_scheduler = "sqlalchemy_celery_beat.schedulers:DatabaseScheduler"
+celery.conf.beat_dburi = database.SQLALCHEMY_DATABASE_URL
+celery.conf.beat_db_schema = None
 celery.conf.timezone = 'UTC'
